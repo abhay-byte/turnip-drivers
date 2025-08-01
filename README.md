@@ -42,8 +42,8 @@ on Termux
 
 ### 2. Install Termux\:X11
 
-* Install **Termux\:X11** from F-Droid:
-  [Download](https://f-droid.org/packages/io.github.termux.x11/)
+* Install **Termux\:X11** from releases:
+  [Download](https://github.com/termux/termux-x11/releases)
 
 * Launch Termux\:X11 (black window should appear)
 
