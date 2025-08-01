@@ -1,62 +1,102 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
 
-# Configurable
-GITHUB_USER="abhay-byte"
-REPO="turnip-drivers"
-RELEASE_TAG="latest"  # or e.g. v25.3.0_R2
+# -----------------------------
+# Config
+# -----------------------------
+REPO_OWNER="abhay-byte"
+REPO_NAME="turnip-drivers"
 
-# Directories
 VULKAN_DRIVER_DIR="$PREFIX/lib/hw/vulkan"
 ICD_DIR="$PREFIX/share/vulkan/icd.d"
-ICD_FILE="$ICD_DIR/turnip_icd.json"
-VCUBE_REPO="https://github.com/KhronosGroup/Vulkan-Tools.git"
+ICD_FILE="$ICD_DIR/freedreno_icd.json"
 
-# Ensure dependencies
+# -----------------------------
+# Install dependencies
+# -----------------------------
 echo "[*] Installing dependencies..."
 pkg update -y
-pkg install -y git cmake vulkan-loader ninja clang libx11-dev mesa-dev
+pkg install -y wget curl tar vulkan-loader git cmake ninja clang libx11-dev mesa-dev x11-repo termux-x11 jq
 
-# Create directories
-echo "[*] Creating Vulkan driver directory..."
-mkdir -p "$VULKAN_DRIVER_DIR"
-mkdir -p "$ICD_DIR"
-
-# Fetch release info from GitHub
-echo "[*] Downloading Turnip release from GitHub..."
-API_URL="https://api.github.com/repos/$GITHUB_USER/$REPO/releases/$RELEASE_TAG"
-ASSET_URL=$(curl -s $API_URL | grep browser_download_url | grep -E 'vulkan\.ad07xx\.so' | cut -d '"' -f 4)
+# -----------------------------
+# Detect latest release from GitHub
+# -----------------------------
+echo "[*] Fetching latest Turnip release from GitHub..."
+LATEST_API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+ASSET_URL=$(curl -s "$LATEST_API" | jq -r '.assets[] | select(.name | endswith(".tar.gz")) | .browser_download_url')
+ASSET_NAME=$(basename "$ASSET_URL")
+ARCHIVE_DIR="${ASSET_NAME%.tar.gz}"
 
 if [ -z "$ASSET_URL" ]; then
-    echo "[!] Failed to find 'vulkan.ad07xx.so' in release assets."
+    echo "[!] Could not find .tar.gz asset in latest release."
     exit 1
 fi
 
-curl -L -o "$VULKAN_DRIVER_DIR/vulkan.ad07xx.so" "$ASSET_URL"
-chmod 755 "$VULKAN_DRIVER_DIR/vulkan.ad07xx.so"
+# -----------------------------
+# Setup DISPLAY & X11
+# -----------------------------
+if [ -z "$DISPLAY" ]; then
+  echo "[*] DISPLAY not set. Setting DISPLAY=:0"
+  export DISPLAY=:0
+fi
 
-# Write ICD JSON
-echo "[*] Creating ICD JSON..."
-cat > "$ICD_FILE" <<EOF
-{
-  "file_format_version": "1.0.0",
-  "ICD": {
-    "library_path": "$VULKAN_DRIVER_DIR/vulkan.ad07xx.so",
-    "api_version": "1.4.318"
-  }
-}
-EOF
+if ! pgrep -f "termux-x11" > /dev/null; then
+  echo "[*] Starting termux-x11 in background..."
+  nohup termux-x11 :0 > /dev/null 2>&1 &
+  sleep 2
+fi
 
-# Build and install vkcube
-echo "[*] Building vkcube from Vulkan-Tools..."
+# -----------------------------
+# Download and extract driver
+# -----------------------------
 cd $HOME
-git clone --depth=1 "$VCUBE_REPO"
+echo "[*] Downloading: $ASSET_NAME"
+wget -O "$ASSET_NAME" "$ASSET_URL"
+
+echo "[*] Extracting: $ASSET_NAME"
+tar -xf "$ASSET_NAME"
+
+# -----------------------------
+# Install Vulkan driver
+# -----------------------------
+echo "[*] Installing Vulkan driver..."
+mkdir -p "$VULKAN_DRIVER_DIR"
+cp "$ARCHIVE_DIR/libvulkan_freedreno.so" "$VULKAN_DRIVER_DIR/"
+chmod 755 "$VULKAN_DRIVER_DIR/libvulkan_freedreno.so"
+
+# -----------------------------
+# Patch and install ICD JSON
+# -----------------------------
+echo "[*] Patching ICD JSON from archive..."
+ORIGINAL_JSON="$ARCHIVE_DIR/freedreno_icd.x86_64.json"
+
+if [ ! -f "$ORIGINAL_JSON" ]; then
+    echo "[!] Original ICD JSON not found in archive."
+    exit 1
+fi
+
+mkdir -p "$ICD_DIR"
+
+jq --arg libpath "$VULKAN_DRIVER_DIR/libvulkan_freedreno.so" \
+   '.ICD.library_path = $libpath' \
+   "$ORIGINAL_JSON" > "$ICD_FILE"
+
+
+# -----------------------------
+# Clone and build vkcube
+# -----------------------------
+echo "[*] Cloning and building Vulkan-Tools (vkcube)..."
+cd $HOME
+rm -rf Vulkan-Tools
+git clone --depth=1 https://github.com/KhronosGroup/Vulkan-Tools.git
 cd Vulkan-Tools
 
 mkdir -p build && cd build
 cmake -G Ninja .. -DCMAKE_BUILD_TYPE=Release
 ninja vkcube
 
-# Test
-echo "[*] Running vkcube with VK_ICD override..."
+# -----------------------------
+# Run vkcube
+# -----------------------------
+echo "[*] Running vkcube using Turnip..."
 VK_ICD_FILENAMES="$ICD_FILE" ./vkcube
