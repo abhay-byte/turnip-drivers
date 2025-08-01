@@ -1,0 +1,11 @@
+﻿{
+  "schemaVersion": 1,
+  "name": "Mesa Turnip Driver v25.3.0-devel-v3",
+  "description": "Compiled from source.",
+  "author": "abhay-byte",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan 1.4.318",
+  "minApi": 27,
+  "libraryName": "libvulkan_freedreno.so"
+}
